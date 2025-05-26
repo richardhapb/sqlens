@@ -1,6 +1,7 @@
 // lensql/src/main.rs
 
 mod proxy;
+mod server;
 
 use crate::proxy::tcp::forward_proxy;
 use tokio::net::TcpListener;

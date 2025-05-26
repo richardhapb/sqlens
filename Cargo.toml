@@ -12,4 +12,6 @@ anyhow = { version = "1.0.98" }
 pgwire = { version = "0.29.1" }
 async-trait = "0.1.88"
 futures = "0.3.31"
+prometheus = "0.14"
+hyper = { version = "1.6.0", features = ["full"] }
 

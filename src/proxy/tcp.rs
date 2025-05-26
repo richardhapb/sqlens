@@ -191,6 +191,7 @@ async fn parse_server_messages(
                     as usize;
 
             if potential_len == 5 {
+
                 // Z messages are always 5 bytes total
                 info!("Found ReadyForQuery (Z) message at position {}", pos);
                 let mut tracker_guard = tracker.lock().await;
