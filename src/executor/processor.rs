@@ -1,5 +1,5 @@
-use crate::proxy::handler::PostgresHandler;
-use crate::proxy::info::ResponseInfo;
+use crate::executor::handler::PostgresHandler;
+use crate::executor::info::ResponseInfo;
 use async_trait::async_trait;
 use futures::{Sink, SinkExt, stream};
 use pgwire::api::auth::noop::NoopStartupHandler;
