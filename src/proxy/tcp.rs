@@ -1,3 +1,4 @@
+use crate::server::metrics::QUERY_STATS;
 use std::net::SocketAddr;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -98,6 +99,9 @@ pub async fn forward_proxy(
         }
 
         info!(total_bytes, "Server connection closed");
+        let report = QUERY_STATS.read().unwrap().get_report();
+        println!("{}", report);
+
         let _ = client_write.shutdown().await;
         Ok::<_, anyhow::Error>(())
     });
@@ -134,6 +138,14 @@ impl QueryTracker {
         self.active_queries.push_back((sql, start_time));
     }
 
+    fn get_duration_seconds(&self) -> f64 {
+        if let Some((_, start_time)) = self.active_queries.front() {
+            start_time.elapsed().as_secs_f64()
+        } else {
+            0.0
+        }
+    }
+
     fn start_results(&mut self) {
         info!("Results starting to arrive");
     }
@@ -146,6 +158,12 @@ impl QueryTracker {
                 duration_ms = duration.as_millis(),
                 "Query completed ✓"
             );
+
+            // Record detailed statistics
+            tokio::spawn(async move {
+                let mut stats = QUERY_STATS.write().unwrap();
+                stats.record_query(&sql, duration);
+            });
         } else {
             // This happens when we get Z before Q, which is normal for initial connection setup
             info!("ReadyForQuery received (connection ready)");
@@ -191,7 +209,6 @@ async fn parse_server_messages(
                     as usize;
 
             if potential_len == 5 {
-
                 // Z messages are always 5 bytes total
                 info!("Found ReadyForQuery (Z) message at position {}", pos);
                 let mut tracker_guard = tracker.lock().await;

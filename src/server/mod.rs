@@ -1,2 +1,2 @@
 pub mod api;
-mod metrics;
+pub mod metrics;
