@@ -1,9 +1,9 @@
 use crate::server::metrics::QUERY_STATS;
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub async fn forward_proxy(
     client_socket: TcpStream,
@@ -61,6 +61,19 @@ pub async fn forward_proxy(
         Ok::<_, anyhow::Error>(())
     });
 
+    tokio::spawn(async {
+        loop {
+            std::thread::sleep(Duration::from_secs(5 * 60));
+            info!("Writing data to database");
+            let report = QUERY_STATS.read().unwrap().get_report();
+            if let Err(result) = QUERY_STATS.read().unwrap().write_to_database() {
+                error!("Error writing data to database: {}", result);
+            };
+
+            println!("{}", report);
+        }
+    });
+
     // Server -> Client (downstream)
     let downstream_tracker = query_tracker.clone();
     let downstream = tokio::spawn(async move {
@@ -99,8 +112,6 @@ pub async fn forward_proxy(
         }
 
         info!(total_bytes, "Server connection closed");
-        let report = QUERY_STATS.read().unwrap().get_report();
-        println!("{}", report);
 
         let _ = client_write.shutdown().await;
         Ok::<_, anyhow::Error>(())
@@ -136,14 +147,6 @@ impl QueryTracker {
         let start_time = Instant::now();
         info!(sql = %sql.trim(), "Query started");
         self.active_queries.push_back((sql, start_time));
-    }
-
-    fn get_duration_seconds(&self) -> f64 {
-        if let Some((_, start_time)) = self.active_queries.front() {
-            start_time.elapsed().as_secs_f64()
-        } else {
-            0.0
-        }
     }
 
     fn start_results(&mut self) {

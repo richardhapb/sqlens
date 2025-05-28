@@ -69,8 +69,13 @@ impl QueryStatistics {
 
         entry.query = query.to_string();
         entry.count += 1;
-        entry.min_duration = entry.min_duration.min(duration);
-
+        entry.total_duration = duration;
+        entry.min_duration = if !entry.min_duration.is_zero() {
+            entry.min_duration.min(duration)
+        } else {
+            duration
+        };
+        entry.max_duration = entry.max_duration.max(duration);
         entry.avg_duration = entry.total_duration.as_secs_f64() / entry.count as f64;
 
         // Prune if required.
@@ -125,4 +130,3 @@ impl Display for QueryStat {
             }
     }
 }
-
