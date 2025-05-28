@@ -1,9 +1,12 @@
 use crate::server::metrics::QUERY_STATS;
 use std::net::SocketAddr;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+static UPDATE_LOOP: OnceLock<()> = OnceLock::new();
 
 pub async fn forward_proxy(
     client_socket: TcpStream,
@@ -61,17 +64,21 @@ pub async fn forward_proxy(
         Ok::<_, anyhow::Error>(())
     });
 
-    tokio::spawn(async {
-        loop {
-            std::thread::sleep(Duration::from_secs(5 * 60));
-            info!("Writing data to database");
-            let report = QUERY_STATS.read().unwrap().get_report();
-            if let Err(result) = QUERY_STATS.read().unwrap().write_to_database() {
-                error!("Error writing data to database: {}", result);
-            };
+    UPDATE_LOOP.get_or_init(|| {
+        tokio::spawn(async {
+            loop {
+                std::thread::sleep(Duration::from_secs(5 * 60));
+                info!("Writing data to database");
+                let report = QUERY_STATS.read().unwrap().get_report();
+                if let Err(result) = QUERY_STATS.read().unwrap().write_to_database() {
+                    error!("Error writing data to database: {}", result);
+                } else {
+                    info!("Data inserted to database successfully");
+                }
 
-            println!("{}", report);
-        }
+                debug!("\n\n{}", report);
+            }
+        });
     });
 
     // Server -> Client (downstream)

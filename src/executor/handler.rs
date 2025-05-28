@@ -57,11 +57,11 @@ impl PostgresHandler {
             SELECT * FROM UNNEST ($1::varchar[], $2::bigint[], $3::real[], $4::real[], $5::real[], $6::real[])
             ON CONFLICT (query) DO UPDATE 
             SET 
-            count = queries.count,
-            total_duration = queries.total_duration,
-            min_duration = queries.min_duration,
-            max_duration = queries.max_duration,
-            avg_duration = queries.avg_duration
+            count = EXCLUDED.count,
+            total_duration = EXCLUDED.total_duration,
+            min_duration = EXCLUDED.min_duration,
+            max_duration = EXCLUDED.max_duration,
+            avg_duration = EXCLUDED.avg_duration
             "#,
             &query_vec[..],
             &counts,

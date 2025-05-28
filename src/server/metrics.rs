@@ -68,7 +68,7 @@ impl QueryStatistics {
 
         entry.query = query.to_string();
         entry.count += 1;
-        entry.total_duration = duration;
+        entry.total_duration = entry.total_duration + duration;
         entry.min_duration = if !entry.min_duration.is_zero() {
             entry.min_duration.min(duration)
         } else {
