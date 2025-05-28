@@ -1,4 +1,4 @@
-use crate::executor::handler::PostgresHandler;
+use crate::executor::handler::{PostgresCredentials, PostgresHandler};
 use crate::executor::info::ResponseInfo;
 use async_trait::async_trait;
 use futures::{Sink, SinkExt, stream};
@@ -29,29 +29,10 @@ impl NoopStartupHandler for DummyProcessor {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let metadata = client.metadata();
-        let user = metadata
-            .get("user")
-            .cloned()
-            .unwrap_or_else(|| "postgres".to_string());
-        let database = metadata
-            .get("database")
-            .cloned()
-            .unwrap_or_else(|| "postgres".to_string());
-
-        let password = std::env::var("SQLENS_PASSWORD").unwrap_or_else(|_| "secret".into());
-        let host = std::env::var("SQLENS_HOST").unwrap_or_else(|_| "localhost".into());
-        let port = std::env::var("SQLENS_PORT").unwrap_or_else(|_| 5432.to_string());
-
-        let dsn = format!(
-            "postgres://{}:{}@{}:{}/{}",
-            user, password, host, port, database
+        client.metadata_mut().insert(
+            "credentials".into(),
+            PostgresCredentials::connection_string(),
         );
-        info!(%dsn, "Generated DSN for SQLX");
-
-        client
-            .metadata_mut()
-            .insert("credentials".into(), dsn.clone());
 
         info!(
             "connected {:?}: {:?}",

@@ -75,35 +75,10 @@ impl PostgresHandler {
     }
 }
 
-pub struct PostgresCredentials {
-    user: String,
-    database: String,
-    password: String,
-    host: String,
-    port: u16,
-}
+pub struct PostgresCredentials;
 
 impl PostgresCredentials {
-    pub fn new() -> anyhow::Result<Self> {
-        let user = std::env::var("SQLENS_USER").unwrap_or_else(|_| "secret".into());
-        let database = std::env::var("SQLENS_DATABASE").unwrap_or_else(|_| "localhost".into());
-        let password = std::env::var("SQLENS_PASSWORD").unwrap_or_else(|_| "secret".into());
-        let host = std::env::var("SQLENS_HOST").unwrap_or_else(|_| "localhost".into());
-        let port = std::env::var("SQLENS_PORT").unwrap_or_else(|_| 5432.to_string());
-
-        Ok(Self {
-            user,
-            database,
-            password,
-            host,
-            port: port.parse()?,
-        })
-    }
-
-    pub fn connection_string(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.user, self.password, self.host, self.port, self.database
-        )
+    pub fn connection_string() -> String {
+        std::env::var("DATABASE_URL").unwrap()
     }
 }

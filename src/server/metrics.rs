@@ -45,14 +45,13 @@ impl QueryStatistics {
     }
 
     pub fn write_to_database(&self) -> anyhow::Result<()> {
-        let credentials = PostgresCredentials::new()?;
+        let conn_str = PostgresCredentials::connection_string();
 
         tokio::spawn(async move {
-            let handler = PostgresHandler::new(&credentials.connection_string())
+            let handler = PostgresHandler::new(&conn_str)
                 .await
                 .unwrap();
 
-            // Now use metrics outside the scope where the guard was held
             if let Err(result) = handler.write_metrics(&QUERY_STATS).await {
                 error!("Error inserting data to database: {}", result);
             }
