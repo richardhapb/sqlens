@@ -6,6 +6,9 @@ use std::{
     time::Duration,
 };
 
+use crate::executor::handler::{PostgresCredentials, PostgresHandler};
+use tracing::error;
+
 lazy_static! {
     pub static ref QUERY_STATS: Arc<RwLock<QueryStatistics>> =
         Arc::new(RwLock::new(QueryStatistics::new()));
@@ -13,7 +16,7 @@ lazy_static! {
 
 pub struct QueryStatistics {
     /// BTreeMap for ordered iteration by key
-    queries: BTreeMap<String, QueryStat>,
+    pub queries: BTreeMap<String, QueryStat>,
 
     /// Maximum number of slow queries to storage
     max_queries: usize,
@@ -41,6 +44,23 @@ impl QueryStatistics {
         report
     }
 
+    pub fn write_to_database(&self) -> anyhow::Result<()> {
+        let credentials = PostgresCredentials::new()?;
+
+        tokio::spawn(async move {
+            let handler = PostgresHandler::new(&credentials.connection_string())
+                .await
+                .unwrap();
+
+            // Now use metrics outside the scope where the guard was held
+            if let Err(result) = handler.write_metrics(&QUERY_STATS).await {
+                error!("Error inserting data to database: {}", result);
+            }
+        });
+
+        Ok(())
+    }
+
     pub fn record_query(&mut self, query: &str, duration: Duration) {
         let entry = self
             .queries
@@ -50,7 +70,7 @@ impl QueryStatistics {
         entry.query = query.to_string();
         entry.count += 1;
         entry.min_duration = entry.min_duration.min(duration);
-        entry.max_duration = entry.max_duration.max(duration);
+
         entry.avg_duration = entry.total_duration.as_secs_f64() / entry.count as f64;
 
         // Prune if required.
@@ -69,13 +89,13 @@ impl QueryStatistics {
     }
 }
 
-struct QueryStat {
-    query: String,
-    count: usize,
-    total_duration: Duration,
-    min_duration: Duration,
-    max_duration: Duration,
-    avg_duration: f64,
+pub struct QueryStat {
+    pub query: String,
+    pub count: usize,
+    pub total_duration: Duration,
+    pub min_duration: Duration,
+    pub max_duration: Duration,
+    pub avg_duration: f64,
 }
 
 impl QueryStat {
@@ -98,10 +118,10 @@ impl Display for QueryStat {
                 "QUERY: {}\n\ncount: {}, total_time: {}, average: {}, min: {}, max: {}\n\n-------------------------------\n\n",
                 self.query,
                 self.count,
-                self.total_duration.as_secs(),
+                self.total_duration.as_secs_f64(),
                 self.avg_duration,
-                self.min_duration.as_secs(),
-                self.max_duration.as_secs()
+                self.min_duration.as_secs_f64(),
+                self.max_duration.as_secs_f64()
             }
     }
 }

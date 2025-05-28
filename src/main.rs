@@ -2,6 +2,7 @@
 
 mod proxy;
 mod server;
+mod executor;
 
 use crate::proxy::tcp::forward_proxy;
 use tokio::net::TcpListener;
