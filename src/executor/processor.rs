@@ -31,7 +31,7 @@ impl NoopStartupHandler for DummyProcessor {
     {
         client.metadata_mut().insert(
             "credentials".into(),
-            PostgresCredentials::connection_string(),
+            PostgresCredentials::connection_string().expect("DATABASE_URL must be set"),
         );
 
         info!(

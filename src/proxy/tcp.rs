@@ -1,4 +1,4 @@
-use crate::server::metrics::QUERY_STATS;
+use crate::server::metrics::{QUERY_STATS, QueryStatistics};
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -65,17 +65,16 @@ pub async fn forward_proxy(
     });
 
     UPDATE_LOOP.get_or_init(|| {
-        tokio::spawn(async {
+        tokio::spawn(async move {
             loop {
-                std::thread::sleep(Duration::from_secs(5 * 60));
+                tokio::time::sleep(Duration::from_secs(60 * 5)).await;
                 info!("Writing data to database");
                 let report = QUERY_STATS.read().unwrap().get_report();
-                if let Err(result) = QUERY_STATS.read().unwrap().write_to_database() {
+                if let Err(result) = QueryStatistics::write_to_database().await {
                     error!("Error writing data to database: {}", result);
                 } else {
                     info!("Data inserted to database successfully");
                 }
-
                 debug!("\n\n{}", report);
             }
         });
@@ -173,6 +172,7 @@ impl QueryTracker {
             tokio::spawn(async move {
                 let mut stats = QUERY_STATS.write().unwrap();
                 stats.record_query(&sql, duration);
+                debug!("Record inserted: {:?}", stats);
             });
         } else {
             // This happens when we get Z before Q, which is normal for initial connection setup

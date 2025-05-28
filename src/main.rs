@@ -1,10 +1,12 @@
 // lensql/src/main.rs
 
+mod executor;
 mod proxy;
 mod server;
-mod executor;
 
 use crate::proxy::tcp::forward_proxy;
+use anyhow::bail;
+use executor::handler::PostgresCredentials;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -17,6 +19,10 @@ async fn main() -> anyhow::Result<()> {
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    if let Err(_) = PostgresCredentials::connection_string() {
+        bail!("DATABASE_URL environment variable must be set");
+    }
 
     let listener = TcpListener::bind("0.0.0.0:5433").await?;
     info!("lensql proxy listening on 0.0.0.0:5433");

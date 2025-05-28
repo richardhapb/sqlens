@@ -14,6 +14,7 @@ lazy_static! {
         Arc::new(RwLock::new(QueryStatistics::new()));
 }
 
+#[derive(Debug)]
 pub struct QueryStatistics {
     /// BTreeMap for ordered iteration by key
     pub queries: BTreeMap<String, QueryStat>,
@@ -31,31 +32,36 @@ impl QueryStatistics {
     }
 
     pub fn get_report(&self) -> String {
+        if self.queries.is_empty() {
+            return "No queries captured.\n".to_string()
+        }
+
         let mut report = String::new();
 
         report.push_str("\n========================\n");
         report.push_str("      Queries Summary\n");
         report.push_str("========================\n\n");
 
-        for query in self.queries.iter() {
-            report.push_str(&format!("{}", query.1));
+        for (_, query) in self.queries.iter() {
+            report.push_str(&format!("{}", query));
         }
 
         report
     }
 
-    pub fn write_to_database(&self) -> anyhow::Result<()> {
-        let conn_str = PostgresCredentials::connection_string();
+    pub async fn write_to_database() -> anyhow::Result<()> {
+        let conn_str = PostgresCredentials::connection_string()?;
 
-        tokio::spawn(async move {
-            let handler = PostgresHandler::new(&conn_str)
-                .await
-                .unwrap();
-
-            if let Err(result) = handler.write_metrics(&QUERY_STATS).await {
-                error!("Error inserting data to database: {}", result);
+        match PostgresHandler::new(&conn_str).await {
+            Ok(handler) => {
+                if let Err(result) = handler.write_metrics().await {
+                    error!("Error inserting data to database: {}", result);
+                }
             }
-        });
+            Err(err) => {
+                error!("Failed to create database handler: {}", err);
+            }
+        }
 
         Ok(())
     }
@@ -93,6 +99,7 @@ impl QueryStatistics {
     }
 }
 
+#[derive(Debug)]
 pub struct QueryStat {
     pub query: String,
     pub count: usize,
