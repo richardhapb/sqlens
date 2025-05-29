@@ -5,6 +5,8 @@ use tracing::info;
 
 use crate::server::metrics::QUERY_STATS;
 
+const MAX_QUERY_LENGTH: usize = 3000;
+
 pub struct PostgresHandler {
     pub pool: PgPool,
 }
@@ -49,8 +51,11 @@ impl PostgresHandler {
             avg_durations = Vec::with_capacity(stats_len);
 
             for (_, stat) in stats.iter() {
-                println!("{}", stat);
-                query_vec.push(stat.query.clone());
+                let mut query = stat.query.clone().trim().to_string();
+                if query.len() > MAX_QUERY_LENGTH {
+                    query = format!("{}...", &query[..MAX_QUERY_LENGTH - 3]);
+                }
+                query_vec.push(query);
                 counts.push(stat.count as i64);
                 total_durations.push(stat.total_duration.as_secs_f32());
                 min_durations.push(stat.min_duration.as_secs_f32());
