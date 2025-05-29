@@ -1,6 +1,6 @@
 use std::env::VarError;
 
-use sqlx::{PgPool, postgres::PgRow};
+use sqlx::{postgres::PgRow, PgPool};
 use tracing::info;
 
 use crate::server::metrics::QUERY_STATS;
@@ -37,7 +37,7 @@ impl PostgresHandler {
             let stats = &QUERY_STATS.read().unwrap().queries;
             if stats.is_empty() {
                 info!("There are no queries to insert into the database.");
-                return Ok(())
+                return Ok(());
             }
             let stats_len = stats.len();
 
