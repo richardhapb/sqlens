@@ -12,11 +12,10 @@ pub async fn forward_proxy(
     client_socket: TcpStream,
     client_addr: SocketAddr,
     query_stats: Stats,
+    database_host: &str,
+    database_port: &str,
 ) -> anyhow::Result<()> {
-    let host = std::env::var("SQLENS_HOST").unwrap_or_else(|_| "localhost".into());
-    let port = std::env::var("SQLENS_PORT").unwrap_or_else(|_| "5432".to_string());
-
-    let server_socket = TcpStream::connect(format!("{}:{}", host, port)).await?;
+    let server_socket = TcpStream::connect(format!("{}:{}", database_host, database_port)).await?;
     info!(%client_addr, "New proxy connection established");
 
     // Configure TCP sockets
@@ -31,7 +30,7 @@ pub async fn forward_proxy(
     let query_tracker = std::sync::Arc::new(tokio::sync::Mutex::new(QueryTracker::new()));
 
     // Client -> Server (upstream)
-    let upstream_tracker = query_tracker.clone();
+    let query_tracker_ref = query_tracker.clone();
     let upstream = tokio::spawn(async move {
         let mut buf = [0u8; 8192];
 
@@ -47,7 +46,7 @@ pub async fn forward_proxy(
 
             // Check for SQL query messages
             if let Some(sql) = parse_query_message(&buf[..n]) {
-                let mut tracker = upstream_tracker.lock().await;
+                let mut tracker = query_tracker_ref.lock().await;
                 tracker.start_query(sql);
             }
 
@@ -58,10 +57,11 @@ pub async fn forward_proxy(
             }
         }
 
-        let _ = server_write.shutdown().await;
+        server_write.shutdown().await?;
         Ok::<_, anyhow::Error>(())
     });
 
+    // Loop that updates data
     let query_stats_ref = query_stats.clone();
     UPDATE_LOOP.get_or_init(|| {
         tokio::spawn(async move {
@@ -69,7 +69,9 @@ pub async fn forward_proxy(
                 tokio::time::sleep(Duration::from_secs(60 * 5)).await;
                 info!("Writing data to database");
                 let report = query_stats_ref.read().unwrap().get_report();
-                if let Err(result) = QueryStatistics::write_to_database(query_stats_ref.clone()).await {
+                if let Err(result) =
+                    QueryStatistics::write_to_database(query_stats_ref.clone()).await
+                {
                     error!("Error writing data to database: {}", result);
                 } else {
                     info!("Data inserted to database successfully");
@@ -80,7 +82,7 @@ pub async fn forward_proxy(
     });
 
     // Server -> Client (downstream)
-    let downstream_tracker = query_tracker.clone();
+    let query_tracker_ref = query_tracker.clone();
     let query_stats_ref = query_stats.clone();
     let downstream = tokio::spawn(async move {
         let mut buf = [0u8; 8192];
@@ -99,10 +101,10 @@ pub async fn forward_proxy(
             total_bytes += n;
 
             // Parse server messages for timing asynchronously
-            let downstream_tracker_ref = downstream_tracker.clone();
+            let query_tracker_ref = query_tracker_ref.clone();
             let query_stats_ref = query_stats_ref.clone();
             tokio::spawn(async move {
-                parse_server_messages(&buf[..n], &downstream_tracker_ref, query_stats_ref).await;
+                parse_server_messages(&buf[..n], &query_tracker_ref, query_stats_ref).await;
             });
 
             // Forward to client
@@ -114,8 +116,8 @@ pub async fn forward_proxy(
 
         // Complete any remaining queries when connection closes
         {
-            let mut tracker = downstream_tracker.lock().await;
-            tracker.complete_remaining_queries();
+            let mut tracker = query_tracker_ref.lock().await;
+            tracker.complete_remaining_queries(query_stats);
         }
 
         info!(total_bytes, "Server connection closed");
@@ -173,7 +175,7 @@ impl QueryTracker {
         }
     }
 
-    fn complete_remaining_queries(&mut self) {
+    fn complete_remaining_queries(&mut self, query_stats: Stats) {
         while let Some((sql, start_time)) = self.active_queries.pop_front() {
             let duration = start_time.elapsed();
             info!(
@@ -181,6 +183,13 @@ impl QueryTracker {
                 duration_ms = duration.as_millis(),
                 "Query completed (connection closed)"
             );
+
+            let mut stats = query_stats.write().unwrap_or_else(|e| {
+                error!("QUERY_STATS is posioned, trying to recover");
+                query_stats.clear_poison();
+                e.into_inner()
+            });
+            stats.record_query(&sql, duration);
         }
     }
 }
@@ -281,7 +290,26 @@ async fn parse_server_messages(
 mod tests {
     use super::*;
     use crate::QueryStatistics;
-    use std::sync::{Arc, RwLock};
+    use std::sync::{Arc, Mutex, RwLock};
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    #[test]
+    fn test_parse_query_message() {
+        let mut buf = Vec::new();
+        let query = "SELECT * FROM something";
+
+        buf.push(b'Q');
+        let len = (query.len() + 1 + 4) as u32; // Message length (query + null terminator + length field)
+        buf.extend_from_slice(&len.to_be_bytes()); // Length as big-endian bytes
+        buf.extend_from_slice(query.as_bytes()); // Query text
+        buf.push(0); // Null terminator
+
+        let result = parse_query_message(&buf);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), query);
+    }
 
     #[tokio::test]
     async fn test_parse_server_message() {
@@ -294,7 +322,7 @@ mod tests {
             .lock()
             .await
             .active_queries
-            .push_back(("SELECT * FROM some_table".to_string(), Instant::now()));
+            .push_back(("ALICE, 20, Berlin".to_string(), Instant::now()));
 
         parse_server_messages(&buf, &tracker, query_stats.clone()).await;
 
@@ -304,5 +332,25 @@ mod tests {
             "Query should be completed after ReadyForQuery"
         );
         assert_eq!(query_stats.read().unwrap().queries.len(), 1);
+    }
+
+    #[test]
+    fn test_complete_query() {
+        let tracker = Arc::new(Mutex::new(QueryTracker::new()));
+        let query = "SELECT * FROM something".to_string();
+
+        tracker.lock().unwrap().start_query(query.clone());
+
+        // Add some time
+        sleep(Duration::from_millis(20));
+
+        let result = tracker.lock().unwrap().complete_query();
+        assert!(result.is_some());
+
+        let (sql, duration) = result.unwrap();
+
+        assert_eq!(sql, query);
+        assert!(duration > Duration::from_millis(20));
+        assert!(duration < Duration::from_millis(100));
     }
 }

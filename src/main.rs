@@ -30,12 +30,17 @@ async fn main() -> anyhow::Result<()> {
     info!("lensql proxy listening on 0.0.0.0:5433");
 
     let query_stats = Arc::new(RwLock::new(QueryStatistics::new()));
+    let host = Arc::new(std::env::var("SQLENS_HOST").unwrap_or_else(|_| "localhost".into()));
+    let port = Arc::new(std::env::var("SQLENS_PORT").unwrap_or_else(|_| "5432".into()));
 
     loop {
         let (client_socket, addr) = listener.accept().await?;
         let query_stats_ref = query_stats.clone();
+
+        let host = host.clone();
+        let port = port.clone();
         tokio::spawn(async move {
-            if let Err(e) = forward_proxy(client_socket, addr, query_stats_ref).await {
+            if let Err(e) = forward_proxy(client_socket, addr, query_stats_ref, &host, &port).await {
                 error!(%e, "connection error");
             }
         });
