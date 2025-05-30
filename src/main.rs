@@ -7,6 +7,8 @@ mod server;
 use crate::proxy::tcp::forward_proxy;
 use anyhow::bail;
 use executor::handler::PostgresCredentials;
+use server::metrics::QueryStatistics;
+use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -27,10 +29,13 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:5433").await?;
     info!("lensql proxy listening on 0.0.0.0:5433");
 
+    let query_stats = Arc::new(RwLock::new(QueryStatistics::new()));
+
     loop {
         let (client_socket, addr) = listener.accept().await?;
+        let query_stats_ref = query_stats.clone();
         tokio::spawn(async move {
-            if let Err(e) = forward_proxy(client_socket, addr).await {
+            if let Err(e) = forward_proxy(client_socket, addr, query_stats_ref).await {
                 error!(%e, "connection error");
             }
         });

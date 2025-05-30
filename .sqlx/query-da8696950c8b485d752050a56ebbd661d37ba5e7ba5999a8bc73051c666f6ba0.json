@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO queries (query, count, total_duration, min_duration, max_duration, avg_duration)\n            SELECT * FROM UNNEST ($1::varchar[], $2::bigint[], $3::real[], $4::real[], $5::real[], $6::real[])\n            ON CONFLICT (query) DO UPDATE \n            SET \n            count = EXCLUDED.count + queries.count,\n            total_duration = EXCLUDED.total_duration + queries.total_duration,\n            min_duration = LEAST(EXCLUDED.min_duration, queries.min_duration),\n            max_duration = GREATEST(EXCLUDED.max_duration, queries.max_duration),\n            avg_duration = (queries.total_duration + EXCLUDED.total_duration) / (queries.count + EXCLUDED.count)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "VarcharArray",
+        "Int8Array",
+        "Float4Array",
+        "Float4Array",
+        "Float4Array",
+        "Float4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da8696950c8b485d752050a56ebbd661d37ba5e7ba5999a8bc73051c666f6ba0"
+}

@@ -1,18 +1,14 @@
-use lazy_static::lazy_static;
 use std::{
     collections::BTreeMap,
     fmt::Display,
-    sync::{Arc, RwLock},
-    time::Duration,
+    time::Duration
 };
+use std::sync::{Arc,RwLock};
 
 use crate::executor::handler::{PostgresCredentials, PostgresHandler};
 use tracing::error;
 
-lazy_static! {
-    pub static ref QUERY_STATS: Arc<RwLock<QueryStatistics>> =
-        Arc::new(RwLock::new(QueryStatistics::new()));
-}
+pub type Stats = Arc<RwLock<QueryStatistics>>;
 
 #[derive(Debug)]
 pub struct QueryStatistics {
@@ -24,7 +20,7 @@ pub struct QueryStatistics {
 }
 
 impl QueryStatistics {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             queries: BTreeMap::new(),
             max_queries: 100, // storage 100 queries
@@ -33,7 +29,7 @@ impl QueryStatistics {
 
     pub fn get_report(&self) -> String {
         if self.queries.is_empty() {
-            return "No queries captured.\n".to_string()
+            return "No queries captured.\n".to_string();
         }
 
         let mut report = String::new();
@@ -49,14 +45,21 @@ impl QueryStatistics {
         report
     }
 
-    pub async fn write_to_database() -> anyhow::Result<()> {
+    pub async fn write_to_database(query_stats: Stats) -> anyhow::Result<()> {
         let conn_str = PostgresCredentials::connection_string()?;
 
         match PostgresHandler::new(&conn_str).await {
             Ok(handler) => {
-                if let Err(result) = handler.write_metrics().await {
+                if let Err(result) = handler.write_metrics(query_stats.clone()).await {
                     error!("Error inserting data to database: {}", result);
+                    return Err(result)
                 }
+                let mut stats = query_stats.write().unwrap_or_else(|e| {
+                    error!("QUERY_STATS is posioned, trying to recover");
+                    query_stats.clear_poison();
+                    e.into_inner()
+                });
+                stats.clear();
             }
             Err(err) => {
                 error!("Failed to create database handler: {}", err);
@@ -66,13 +69,17 @@ impl QueryStatistics {
         Ok(())
     }
 
+    pub fn clear(&mut self) {
+        self.queries = BTreeMap::new();
+    }
+
     pub fn record_query(&mut self, query: &str, duration: Duration) {
         let entry = self
             .queries
-            .entry(query.to_string())
+            .entry(query.trim().to_string())
             .or_insert_with(QueryStat::new);
 
-        entry.query = query.to_string();
+        entry.query = query.trim().to_string();
         entry.count += 1;
         entry.total_duration = entry.total_duration + duration;
         entry.min_duration = if !entry.min_duration.is_zero() {

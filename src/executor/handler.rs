@@ -3,9 +3,8 @@ use std::env::VarError;
 use sqlx::{postgres::PgRow, PgPool};
 use tracing::info;
 
-use crate::server::metrics::QUERY_STATS;
+use crate::server::metrics::Stats;
 
-const MAX_QUERY_LENGTH: usize = 3000;
 
 pub struct PostgresHandler {
     pub pool: PgPool,
@@ -24,7 +23,7 @@ impl PostgresHandler {
         Ok(rows)
     }
 
-    pub async fn write_metrics(&self) -> anyhow::Result<()> {
+    pub async fn write_metrics(&self, query_stats: Stats) -> anyhow::Result<()> {
         // Create all the vectors before getting the lock
         let (
             mut query_vec,
@@ -36,7 +35,7 @@ impl PostgresHandler {
         );
 
         {
-            let stats = &QUERY_STATS.read().unwrap().queries;
+            let stats = &query_stats.read().unwrap().queries;
             if stats.is_empty() {
                 info!("There are no queries to insert into the database.");
                 return Ok(());
@@ -51,11 +50,7 @@ impl PostgresHandler {
             avg_durations = Vec::with_capacity(stats_len);
 
             for (_, stat) in stats.iter() {
-                let mut query = stat.query.clone().trim().to_string();
-                if query.len() > MAX_QUERY_LENGTH {
-                    query = format!("{}...", &query[..MAX_QUERY_LENGTH - 3]);
-                }
-                query_vec.push(query);
+                query_vec.push(stat.query.clone());
                 counts.push(stat.count as i64);
                 total_durations.push(stat.total_duration.as_secs_f32());
                 min_durations.push(stat.min_duration.as_secs_f32());
@@ -69,11 +64,11 @@ impl PostgresHandler {
             SELECT * FROM UNNEST ($1::varchar[], $2::bigint[], $3::real[], $4::real[], $5::real[], $6::real[])
             ON CONFLICT (query) DO UPDATE 
             SET 
-            count = EXCLUDED.count,
-            total_duration = EXCLUDED.total_duration,
-            min_duration = EXCLUDED.min_duration,
-            max_duration = EXCLUDED.max_duration,
-            avg_duration = EXCLUDED.avg_duration
+            count = EXCLUDED.count + queries.count,
+            total_duration = EXCLUDED.total_duration + queries.total_duration,
+            min_duration = LEAST(EXCLUDED.min_duration, queries.min_duration),
+            max_duration = GREATEST(EXCLUDED.max_duration, queries.max_duration),
+            avg_duration = (queries.total_duration + EXCLUDED.total_duration) / (queries.count + EXCLUDED.count)
             "#,
             &query_vec[..],
             &counts,

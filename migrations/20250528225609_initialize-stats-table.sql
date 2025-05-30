@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS queries (
-    id SERIAL PRIMARY KEY,
-    query varchar(3000) UNIQUE,
+    id serial PRIMARY KEY,
+    query text UNIQUE,
     count bigint,
     total_duration real,
     min_duration real,
