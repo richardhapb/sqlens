@@ -1,12 +1,12 @@
 // lensql/src/main.rs
 
-mod executor;
+mod database;
 mod proxy;
 mod server;
 
 use crate::proxy::tcp::forward_proxy;
 use anyhow::bail;
-use executor::handler::PostgresCredentials;
+use database::handler::PostgresCredentials;
 use server::metrics::QueryStatistics;
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;

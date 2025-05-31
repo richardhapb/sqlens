@@ -5,7 +5,7 @@ use std::{
 };
 use std::sync::{Arc,RwLock};
 
-use crate::executor::handler::{PostgresCredentials, PostgresHandler};
+use crate::database::handler::{PostgresCredentials, PostgresHandler};
 use tracing::error;
 
 pub type Stats = Arc<RwLock<QueryStatistics>>;

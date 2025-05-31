@@ -1,6 +1,6 @@
 use std::env::VarError;
 
-use sqlx::{postgres::PgRow, PgPool};
+use sqlx::PgPool;
 use tracing::info;
 
 use crate::server::metrics::Stats;
@@ -15,12 +15,6 @@ impl PostgresHandler {
         Ok(Self {
             pool: sqlx::PgPool::connect(sql_str).await?,
         })
-    }
-
-    pub async fn do_query(&self, query: &str) -> anyhow::Result<Vec<PgRow>> {
-        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
-
-        Ok(rows)
     }
 
     pub async fn write_metrics(&self, query_stats: Stats) -> anyhow::Result<()> {
