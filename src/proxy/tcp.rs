@@ -14,6 +14,7 @@ pub async fn forward_proxy(
     query_stats: Stats,
     database_host: &str,
     database_port: &str,
+    interval: u64,
 ) -> anyhow::Result<()> {
     let server_socket = TcpStream::connect(format!("{}:{}", database_host, database_port)).await?;
     info!(%client_addr, "New proxy connection established");
@@ -43,7 +44,7 @@ pub async fn forward_proxy(
                     break;
                 }
                 Ok(n) => {
-                    trace!("Buffer received from client with length {n}");
+                    trace!("Buffer received from client with length {}", n);
                     n
                 }
                 Err(e) => {
@@ -76,7 +77,7 @@ pub async fn forward_proxy(
     UPDATE_LOOP.get_or_init(|| {
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(60 * 5)).await;
+                tokio::time::sleep(Duration::from_secs(interval)).await;
                 info!("Writing data to database");
                 let report = query_stats_ref.read().unwrap().get_report();
                 if let Err(result) =
