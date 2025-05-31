@@ -1,5 +1,3 @@
-// lensql/src/main.rs
-
 mod database;
 mod proxy;
 mod server;
@@ -52,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", args.bind)).await?;
-    info!("lensql proxy listening on 0.0.0.0:{}", args.bind);
+    info!("sqlens proxy listening on 0.0.0.0:{}", args.bind);
 
     let query_stats = Arc::new(RwLock::new(QueryStatistics::new()));
 
