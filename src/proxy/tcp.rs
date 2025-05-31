@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 static UPDATE_LOOP: OnceLock<()> = OnceLock::new();
 
@@ -26,6 +26,8 @@ pub async fn forward_proxy(
     let (mut client_read, mut client_write) = tokio::io::split(client_socket);
     let (mut server_read, mut server_write) = tokio::io::split(server_socket);
 
+    trace!("Channels opened");
+
     // Shared state for query tracking
     let query_tracker = std::sync::Arc::new(tokio::sync::Mutex::new(QueryTracker::new()));
 
@@ -36,8 +38,14 @@ pub async fn forward_proxy(
 
         loop {
             let n = match client_read.read(&mut buf).await {
-                Ok(0) => break, // Connection closed
-                Ok(n) => n,
+                Ok(0) => {
+                    trace!(client = ?client_addr, "Connection closed signal received from client");
+                    break;
+                }
+                Ok(n) => {
+                    trace!("Buffer received from client with length {n}");
+                    n
+                }
                 Err(e) => {
                     warn!("Error reading from client: {}", e);
                     break;
@@ -47,6 +55,7 @@ pub async fn forward_proxy(
             // Check for SQL query messages
             if let Some(sql) = parse_query_message(&buf[..n]) {
                 let mut tracker = query_tracker_ref.lock().await;
+                trace!(sql = %sql, "Starting query");
                 tracker.start_query(sql);
             }
 
@@ -58,6 +67,7 @@ pub async fn forward_proxy(
         }
 
         server_write.shutdown().await?;
+        trace!("Server writer closed");
         Ok::<_, anyhow::Error>(())
     });
 
@@ -76,7 +86,7 @@ pub async fn forward_proxy(
                 } else {
                     info!("Data inserted to database successfully");
                 }
-                debug!("\n\n{}", report);
+                trace!("\n\n{}", report);
             }
         });
     });
@@ -90,8 +100,14 @@ pub async fn forward_proxy(
 
         loop {
             let n = match server_read.read(&mut buf).await {
-                Ok(0) => break, // Connection closed
-                Ok(n) => n,
+                Ok(0) => {
+                    trace!(client = ?client_addr, "Connection closed signal received from server");
+                    break;
+                }
+                Ok(n) => {
+                    trace!("Buffer received from server with length {n}");
+                    n
+                }
                 Err(e) => {
                     warn!("Error reading from server: {}", e);
                     break;
@@ -104,6 +120,7 @@ pub async fn forward_proxy(
             let query_tracker_ref = query_tracker_ref.clone();
             let query_stats_ref = query_stats_ref.clone();
             tokio::spawn(async move {
+                trace!(buf_n = n, "Parsing server message");
                 parse_server_messages(&buf[..n], &query_tracker_ref, query_stats_ref).await;
             });
 
@@ -117,6 +134,7 @@ pub async fn forward_proxy(
         // Complete any remaining queries when connection closes
         {
             let mut tracker = query_tracker_ref.lock().await;
+            trace!(queries = ?tracker.active_queries , "Completing remaining queries");
             tracker.complete_remaining_queries(query_stats);
         }
 
@@ -141,6 +159,7 @@ pub async fn forward_proxy(
 }
 
 // Simple query tracker
+#[derive(Debug)]
 struct QueryTracker {
     active_queries: std::collections::VecDeque<(String, Instant)>,
 }
@@ -154,7 +173,7 @@ impl QueryTracker {
 
     fn start_query(&mut self, sql: String) {
         let start_time = Instant::now();
-        info!(sql = %sql.trim(), "Query started");
+        debug!(sql = %sql.trim(), "Query started");
         self.active_queries.push_back((sql, start_time));
     }
 
@@ -195,8 +214,10 @@ impl QueryTracker {
 }
 
 // Parse PostgreSQL Query message (type 'Q')
+#[instrument(skip_all)]
 fn parse_query_message(buf: &[u8]) -> Option<String> {
     if buf.len() < 5 || buf[0] != b'Q' {
+        trace!("Returning None because incomplete buffer message");
         return None;
     }
 
@@ -206,6 +227,7 @@ fn parse_query_message(buf: &[u8]) -> Option<String> {
 }
 
 // Parse server messages for detailed timing
+#[instrument(skip_all)]
 async fn parse_server_messages(
     buf: &[u8],
     tracker: &std::sync::Arc<tokio::sync::Mutex<QueryTracker>>,

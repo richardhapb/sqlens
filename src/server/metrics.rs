@@ -1,12 +1,8 @@
-use std::{
-    collections::BTreeMap,
-    fmt::Display,
-    time::Duration
-};
-use std::sync::{Arc,RwLock};
+use std::sync::{Arc, RwLock};
+use std::{collections::BTreeMap, fmt::Display, time::Duration};
 
 use crate::database::handler::{PostgresCredentials, PostgresHandler};
-use tracing::error;
+use tracing::{error, instrument, trace};
 
 pub type Stats = Arc<RwLock<QueryStatistics>>;
 
@@ -21,14 +17,17 @@ pub struct QueryStatistics {
 
 impl QueryStatistics {
     pub fn new() -> Self {
+        trace!("Creating new QueryStatistics");
         Self {
             queries: BTreeMap::new(),
             max_queries: 100, // storage 100 queries
         }
     }
 
+    #[instrument(skip(self))]
     pub fn get_report(&self) -> String {
         if self.queries.is_empty() {
+            trace!("Returning empty query report.");
             return "No queries captured.\n".to_string();
         }
 
@@ -42,17 +41,21 @@ impl QueryStatistics {
             report.push_str(&format!("{}", query));
         }
 
+        trace!("Returning a report with {} queries", self.queries.len());
         report
     }
 
+    #[instrument(skip_all)]
     pub async fn write_to_database(query_stats: Stats) -> anyhow::Result<()> {
         let conn_str = PostgresCredentials::connection_string()?;
+
+        trace!("Connection string retrieved");
 
         match PostgresHandler::new(&conn_str).await {
             Ok(handler) => {
                 if let Err(result) = handler.write_metrics(query_stats.clone()).await {
                     error!("Error inserting data to database: {}", result);
-                    return Err(result)
+                    return Err(result);
                 }
                 let mut stats = query_stats.write().unwrap_or_else(|e| {
                     error!("QUERY_STATS is posioned, trying to recover");
@@ -70,10 +73,13 @@ impl QueryStatistics {
     }
 
     pub fn clear(&mut self) {
+        trace!(stats = ?self.queries, "Clearing stats");
         self.queries = BTreeMap::new();
     }
 
     pub fn record_query(&mut self, query: &str, duration: Duration) {
+        trace!(%query, "Recording query");
+
         let entry = self
             .queries
             .entry(query.trim().to_string())
@@ -92,6 +98,7 @@ impl QueryStatistics {
 
         // Prune if required.
         if self.queries.len() > self.max_queries {
+            trace!(n = self.queries.len(), "Pruning queries");
             if let Some(fastest) = self.get_fastest() {
                 self.queries.remove(&fastest);
             }
@@ -99,6 +106,7 @@ impl QueryStatistics {
     }
 
     fn get_fastest(&self) -> Option<String> {
+        trace!("Getting fastest query");
         self.queries
             .iter()
             .min_by(|a, b| a.1.max_duration.cmp(&b.1.max_duration))
@@ -118,6 +126,7 @@ pub struct QueryStat {
 
 impl QueryStat {
     fn new() -> Self {
+        trace!("Creating new QueryStat");
         Self {
             query: String::new(),
             count: 0,

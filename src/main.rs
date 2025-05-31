@@ -10,7 +10,7 @@ use database::handler::PostgresCredentials;
 use server::metrics::QueryStatistics;
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -30,8 +30,16 @@ async fn main() -> anyhow::Result<()> {
     info!("lensql proxy listening on 0.0.0.0:5433");
 
     let query_stats = Arc::new(RwLock::new(QueryStatistics::new()));
-    let host = Arc::new(std::env::var("SQLENS_HOST").unwrap_or_else(|_| "localhost".into()));
-    let port = Arc::new(std::env::var("SQLENS_PORT").unwrap_or_else(|_| "5432".into()));
+    let host = Arc::new(std::env::var("SQLENS_HOST").unwrap_or_else(|_| {
+        trace!("SQLENS_HOST not set, using default");
+        "localhost".into()
+    }));
+    let port = Arc::new(std::env::var("SQLENS_PORT").unwrap_or_else(|_| {
+        trace!("SQLENS_PORT not set, using default");
+        "5432".into()
+    }));
+
+    trace!(%host, %port, "SQLENS environment variables");
 
     loop {
         let (client_socket, addr) = listener.accept().await?;
@@ -40,7 +48,8 @@ async fn main() -> anyhow::Result<()> {
         let host = host.clone();
         let port = port.clone();
         tokio::spawn(async move {
-            if let Err(e) = forward_proxy(client_socket, addr, query_stats_ref, &host, &port).await {
+            if let Err(e) = forward_proxy(client_socket, addr, query_stats_ref, &host, &port).await
+            {
                 error!(%e, "connection error");
             }
         });

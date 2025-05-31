@@ -1,10 +1,9 @@
 use std::env::VarError;
 
 use sqlx::PgPool;
-use tracing::info;
+use tracing::{info, instrument, trace};
 
 use crate::server::metrics::Stats;
-
 
 pub struct PostgresHandler {
     pub pool: PgPool,
@@ -12,11 +11,13 @@ pub struct PostgresHandler {
 
 impl PostgresHandler {
     pub async fn new(sql_str: &str) -> anyhow::Result<Self> {
+        trace!("Creating new Postgres connection");
         Ok(Self {
             pool: sqlx::PgPool::connect(sql_str).await?,
         })
     }
 
+    #[instrument(skip_all)]
     pub async fn write_metrics(&self, query_stats: Stats) -> anyhow::Result<()> {
         // Create all the vectors before getting the lock
         let (
@@ -36,12 +37,24 @@ impl PostgresHandler {
             }
             let stats_len = stats.len();
 
+            trace!(n = stats_len, "Creating vectors for SQL batch insertion");
+
             query_vec = Vec::with_capacity(stats_len);
             counts = Vec::with_capacity(stats_len);
             total_durations = Vec::with_capacity(stats_len);
             min_durations = Vec::with_capacity(stats_len);
             max_durations = Vec::with_capacity(stats_len);
             avg_durations = Vec::with_capacity(stats_len);
+
+            trace!(
+                ?query_vec,
+                ?counts,
+                ?total_durations,
+                ?min_durations,
+                ?max_durations,
+                ?avg_durations,
+                "Inserting data"
+            );
 
             for (_, stat) in stats.iter() {
                 query_vec.push(stat.query.clone());
