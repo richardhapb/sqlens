@@ -28,7 +28,7 @@ SQLens sits between your application and PostgreSQL database, transparently forw
 
 ```bash
 # Set required environment variables
-export DATABASE_URL="postgresql://user:pass@localhost:5432/metrics_db"
+export DATABASE_URL="postgresql://user:pass@localhost:5432/metrics_db"  # You can use the --str argument as well
 export SQLENS_HOST="localhost"  # Optional: PostgreSQL host (default: localhost)
 export SQLENS_PORT="5432"      # Optional: PostgreSQL port (default: 5432)
 
@@ -41,6 +41,7 @@ sqlens --bind 5433 --interval 300  # Updates metrics every 5 minutes
 Command line options:
 - `-H, --host`: Database engine host (default: localhost)
 - `-p, --port`: Database engine port (default: 5432) 
+- `-s, --str`: Connection string of the Database engine (e.g. postgresql://myuser:mypass@localhost:5432/mydb)
 - `-b, --bind`: Port where SQLens will listen (default: 5433)
 - `-i, --interval`: Metrics update interval in seconds (default: 300)
 

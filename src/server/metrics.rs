@@ -46,12 +46,11 @@ impl QueryStatistics {
     }
 
     #[instrument(skip_all)]
-    pub async fn write_to_database(query_stats: Stats) -> anyhow::Result<()> {
-        let conn_str = PostgresCredentials::connection_string()?;
+    pub async fn write_to_database(query_stats: Stats, credentials: &PostgresCredentials) -> anyhow::Result<()> {
 
         trace!("Connection string retrieved");
 
-        match PostgresHandler::new(&conn_str).await {
+        match PostgresHandler::new(&credentials.conn_str).await {
             Ok(handler) => {
                 if let Err(result) = handler.write_metrics(query_stats.clone()).await {
                     error!("Error inserting data to database: {}", result);

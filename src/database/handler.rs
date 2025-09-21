@@ -1,9 +1,7 @@
-use std::env::VarError;
-
 use sqlx::PgPool;
 use tracing::{info, instrument, trace};
 
-use crate::server::metrics::Stats;
+use crate::{Args, server::metrics::Stats};
 
 pub struct PostgresHandler {
     pub pool: PgPool,
@@ -89,10 +87,24 @@ impl PostgresHandler {
     }
 }
 
-pub struct PostgresCredentials;
+#[derive(Clone)]
+pub struct PostgresCredentials {
+    pub conn_str: String,
+}
 
 impl PostgresCredentials {
-    pub fn connection_string() -> Result<String, VarError> {
-        std::env::var("DATABASE_URL")
+    pub fn try_new(args: &Args) -> Option<Self> {
+        match &args.str {
+            Some(conn_str) => Some(Self {
+                conn_str: conn_str.to_string(),
+            }),
+            None => {
+                if let Ok(conn_str) = std::env::var("DATABASE_URL") {
+                    Some(Self { conn_str })
+                } else {
+                    None
+                }
+            }
+        }
     }
 }

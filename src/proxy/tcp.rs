@@ -1,3 +1,4 @@
+use crate::database::handler::PostgresCredentials;
 use crate::server::metrics::{QueryStatistics, Stats};
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -14,6 +15,7 @@ pub async fn forward_proxy(
     query_stats: Stats,
     database_host: &str,
     database_port: &str,
+    credentials: PostgresCredentials,
     interval: u64,
 ) -> anyhow::Result<()> {
     let server_socket = TcpStream::connect(format!("{}:{}", database_host, database_port)).await?;
@@ -74,6 +76,7 @@ pub async fn forward_proxy(
 
     // Loop that updates data
     let query_stats_ref = query_stats.clone();
+    let credentials_ref = credentials.clone();
     UPDATE_LOOP.get_or_init(|| {
         tokio::spawn(async move {
             loop {
@@ -81,7 +84,7 @@ pub async fn forward_proxy(
                 info!("Writing data to database");
                 let report = query_stats_ref.read().unwrap().get_report();
                 if let Err(result) =
-                    QueryStatistics::write_to_database(query_stats_ref.clone()).await
+                    QueryStatistics::write_to_database(query_stats_ref.clone(), &credentials_ref).await
                 {
                     error!("Error writing data to database: {}", result);
                 } else {
