@@ -32,7 +32,7 @@ struct Args {
     #[arg(short, long, default_value_t=5433.to_string())]
     bind: String,
 
-    /// Queries update interval (seconds) that is storaged in database and logged
+    /// Queries update interval (seconds) that is stored in database and logged (default: 300 = 5m)
     #[arg(short, long, default_value_t = 5 * 60)]
     interval: u64,
 }
