@@ -28,7 +28,7 @@ impl PostgresHandler {
         );
 
         {
-            let stats = &query_stats.read().unwrap().queries;
+            let stats = &query_stats.read().await.queries;
             if stats.is_empty() {
                 info!("There are no queries to insert into the database.");
                 return Ok(());

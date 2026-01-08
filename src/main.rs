@@ -6,8 +6,9 @@ use crate::proxy::tcp::forward_proxy;
 use clap::Parser;
 use database::handler::PostgresCredentials;
 use server::metrics::QueryStatistics;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tracing::{error, info, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

@@ -1,119 +1,124 @@
-use std::sync::{Arc, RwLock};
-use std::{collections::BTreeMap, fmt::Display, time::Duration};
-
-use crate::database::handler::{PostgresCredentials, PostgresHandler};
-use tracing::{error, instrument, trace};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 
 pub type Stats = Arc<RwLock<QueryStatistics>>;
 
 #[derive(Debug)]
 pub struct QueryStatistics {
-    /// BTreeMap for ordered iteration by key
     pub queries: BTreeMap<String, QueryStat>,
-
-    /// Maximum number of slow queries to storage
     max_queries: usize,
 }
 
 impl QueryStatistics {
     pub fn new() -> Self {
-        trace!("Creating new QueryStatistics");
         Self {
             queries: BTreeMap::new(),
-            max_queries: 100, // storage 100 queries
+            max_queries: 100,
         }
     }
 
-    #[instrument(skip(self))]
-    pub fn get_report(&self) -> String {
-        if self.queries.is_empty() {
-            trace!("Returning empty query report.");
-            return "No queries captured.\n".to_string();
-        }
-
-        let mut report = String::new();
-
-        report.push_str("\n========================\n");
-        report.push_str("      Queries Summary\n");
-        report.push_str("========================\n\n");
-
-        for (_, query) in self.queries.iter() {
-            report.push_str(&format!("{}", query));
-        }
-
-        trace!("Returning a report with {} queries", self.queries.len());
-        report
-    }
-
-    #[instrument(skip_all)]
-    pub async fn write_to_database(query_stats: Stats, credentials: &PostgresCredentials) -> anyhow::Result<()> {
-
-        trace!("Connection string retrieved");
-
-        match PostgresHandler::new(&credentials.conn_str).await {
-            Ok(handler) => {
-                if let Err(result) = handler.write_metrics(query_stats.clone()).await {
-                    error!("Error inserting data to database: {}", result);
-                    return Err(result);
-                }
-                let mut stats = query_stats.write().unwrap_or_else(|e| {
-                    error!("QUERY_STATS is posioned, trying to recover");
-                    query_stats.clear_poison();
-                    e.into_inner()
-                });
-                stats.clear();
-            }
-            Err(err) => {
-                error!("Failed to create database handler: {}", err);
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn clear(&mut self) {
-        trace!(stats = ?self.queries, "Clearing stats");
-        self.queries = BTreeMap::new();
-    }
-
+    /// Record a query execution
     pub fn record_query(&mut self, query: &str, duration: Duration) {
-        trace!(%query, "Recording query");
+        let normalized = normalize_query(query);
+        let entry = self.queries.entry(normalized).or_default();
 
-        let entry = self
-            .queries
-            .entry(query.trim().to_string())
-            .or_insert_with(QueryStat::new);
-
-        entry.query = query.trim().to_string();
+        entry.query = query.to_string();
         entry.count += 1;
-        entry.total_duration = entry.total_duration + duration;
-        entry.min_duration = if !entry.min_duration.is_zero() {
-            entry.min_duration.min(duration)
-        } else {
+        entry.total_duration += duration;
+        entry.min_duration = if entry.min_duration.is_zero() {
             duration
+        } else {
+            entry.min_duration.min(duration)
         };
         entry.max_duration = entry.max_duration.max(duration);
         entry.avg_duration = entry.total_duration.as_secs_f64() / entry.count as f64;
 
-        // Prune if required.
-        if self.queries.len() > self.max_queries {
-            trace!(n = self.queries.len(), "Pruning queries");
-            if let Some(fastest) = self.get_fastest() {
-                self.queries.remove(&fastest);
-            }
+        // Prune if needed
+        if self.queries.len() > self.max_queries
+            && let Some(fastest) = self.get_fastest_query()
+        {
+            self.queries.remove(&fastest);
         }
     }
 
-    fn get_fastest(&self) -> Option<String> {
-        trace!("Getting fastest query");
+    /// Get queries slower than threshold
+    pub fn get_slow_queries(&self, threshold_ms: u64) -> Vec<&QueryStat> {
+        let mut slow: Vec<_> = self
+            .queries
+            .values()
+            .filter(|q| {
+                let avg_ms = (q.avg_duration * 1000.0) as u64;
+                avg_ms > threshold_ms || q.max_duration.as_millis() as u64 > threshold_ms * 2
+            })
+            .collect();
+
+        slow.sort_by(|a, b| b.total_duration.cmp(&a.total_duration));
+        slow
+    }
+
+    /// Generate a summary report
+    pub fn get_summary_report(&self) -> String {
+        if self.queries.is_empty() {
+            return "No queries captured.\n".to_string();
+        }
+
+        let mut report = String::from("\n=== Query Statistics ===\n\n");
+
+        for (i, stat) in self.queries.values().enumerate() {
+            report.push_str(&format!(
+                "{}. [{} executions] avg: {:.2}ms, max: {:.2}ms, total: {:.2}s\n   {}\n\n",
+                i + 1,
+                stat.count,
+                stat.avg_duration * 1000.0,
+                stat.max_duration.as_secs_f64() * 1000.0,
+                stat.total_duration.as_secs_f64(),
+                truncate_query(&stat.query, 200)
+            ));
+        }
+
+        report
+    }
+
+    /// Generate slow query report
+    pub fn get_slow_query_report(&self, threshold_ms: u64) -> String {
+        let slow = self.get_slow_queries(threshold_ms);
+
+        if slow.is_empty() {
+            return format!("No slow queries (threshold: {}ms)\n", threshold_ms);
+        }
+
+        let mut report = format!("\n=== Slow Queries (>{}ms) ===\n\n", threshold_ms);
+
+        for (i, stat) in slow.iter().enumerate() {
+            report.push_str(&format!(
+                "{}. [{}x] avg: {:.0}ms | max: {:.0}ms | total: {:.2}s\n   {}\n\n",
+                i + 1,
+                stat.count,
+                stat.avg_duration * 1000.0,
+                stat.max_duration.as_secs_f64() * 1000.0,
+                stat.total_duration.as_secs_f64(),
+                truncate_query(&stat.query, 500)
+            ));
+        }
+
+        report
+    }
+
+    pub fn clear(&mut self) {
+        self.queries.clear();
+    }
+
+    fn get_fastest_query(&self) -> Option<String> {
         self.queries
             .iter()
-            .min_by(|a, b| a.1.max_duration.cmp(&b.1.max_duration))
-            .map(|q| q.0.clone())
+            .min_by(|a, b| a.1.avg_duration.partial_cmp(&b.1.avg_duration).unwrap())
+            .map(|(k, _)| k.clone())
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct QueryStat {
     pub query: String,
     pub count: usize,
@@ -123,31 +128,15 @@ pub struct QueryStat {
     pub avg_duration: f64,
 }
 
-impl QueryStat {
-    fn new() -> Self {
-        trace!("Creating new QueryStat");
-        Self {
-            query: String::new(),
-            count: 0,
-            total_duration: Duration::from_secs(0),
-            min_duration: Duration::from_secs(0),
-            max_duration: Duration::from_secs(0),
-            avg_duration: 0.0,
-        }
-    }
+// Helper functions
+fn normalize_query(sql: &str) -> String {
+    sql.trim().to_string()
 }
 
-impl Display for QueryStat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write! {
-        f,
-                "QUERY: {}\n\ncount: {}, total_time: {}, average: {}, min: {}, max: {}\n\n-------------------------------\n\n",
-                self.query,
-                self.count,
-                self.total_duration.as_secs_f64(),
-                self.avg_duration,
-                self.min_duration.as_secs_f64(),
-                self.max_duration.as_secs_f64()
-            }
+fn truncate_query(query: &str, max_len: usize) -> String {
+    if query.len() > max_len {
+        format!("{}...", &query[..max_len])
+    } else {
+        query.to_string()
     }
 }
