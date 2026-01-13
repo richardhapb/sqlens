@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::time::Instant;
+use tracing::{debug, info};
 
 /// Tracks in-flight queries in the PostgreSQL protocol
 #[derive(Debug, Default)]
@@ -15,6 +16,7 @@ impl QueryTracker {
 
     /// Start tracking a new query (from Parse or Query message)
     pub fn start_query(&mut self, sql: String) {
+        debug!(%sql, "starting");
         self.last_prepared = Some(sql.clone());
         self.pending_queries.push_back((sql, Instant::now()));
     }
@@ -22,6 +24,7 @@ impl QueryTracker {
     /// Start tracking an Execute (reuses last prepared statement)
     pub fn start_execute(&mut self) {
         if let Some(ref sql) = self.last_prepared {
+            debug!(%sql, "starting");
             self.pending_queries
                 .push_back((sql.clone(), Instant::now()));
         }
@@ -29,8 +32,15 @@ impl QueryTracker {
 
     /// Complete the oldest in-flight query, returning (sql, duration)
     pub fn complete_query(&mut self) -> Option<(String, std::time::Duration)> {
-        self.pending_queries
+        let completed = self
+            .pending_queries
             .pop_front()
-            .map(|(sql, start)| (sql, start.elapsed()))
+            .map(|(sql, start)| (sql, start.elapsed()));
+
+        if let Some((ref sql, elapsed)) = completed {
+            info!(?elapsed, %sql, "completed");
+        }
+
+        completed
     }
 }
