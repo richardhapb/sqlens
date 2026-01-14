@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use tracing::{info, instrument, trace};
 
-use crate::{Args, server::metrics::Stats};
+use crate::{Args, server::metrics::QueryStatistics};
 
 pub struct PostgresHandler {
     pub pool: PgPool,
@@ -16,7 +16,7 @@ impl PostgresHandler {
     }
 
     #[instrument(skip_all)]
-    pub async fn write_metrics(&self, query_stats: Stats) -> anyhow::Result<()> {
+    pub async fn write_metrics(&self, query_stats: QueryStatistics) -> anyhow::Result<()> {
         // Create all the vectors before getting the lock
         let (
             mut query_vec,
@@ -28,7 +28,7 @@ impl PostgresHandler {
         );
 
         {
-            let stats = &query_stats.read().await.queries;
+            let stats = &query_stats.queries;
             if stats.is_empty() {
                 info!("There are no queries to insert into the database.");
                 return Ok(());

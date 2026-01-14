@@ -106,10 +106,6 @@ impl QueryStatistics {
         report
     }
 
-    pub fn clear(&mut self) {
-        self.queries.clear();
-    }
-
     fn get_fastest_query(&self) -> Option<String> {
         self.queries
             .iter()
@@ -130,7 +126,10 @@ pub struct QueryStat {
 
 // Helper functions
 fn normalize_query(sql: &str) -> String {
-    sql.trim().to_string()
+    match pg_query::fingerprint(sql) {
+        Ok(fingerprint) => fingerprint.value.to_string(),
+        Err(_) => sql.trim().to_string(), // fallback
+    }
 }
 
 fn truncate_query(query: &str, max_len: usize) -> String {

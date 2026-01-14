@@ -1,7 +1,7 @@
 use super::metrics::Stats;
-use crate::database::handler::PostgresCredentials;
+use crate::{database::handler::PostgresCredentials, server::metrics::QueryStatistics};
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub struct MetricsReporter {
     query_stats: Stats,
@@ -30,39 +30,27 @@ impl MetricsReporter {
 
     async fn report(&self) {
         info!("=== Metrics Report ===");
+        // Atomically swap out current stats
+        let snapshot = {
+            let mut stats = self.query_stats.write().await;
+            let snapshot = std::mem::replace(&mut *stats, QueryStatistics::new());
+            snapshot
+        };
 
-        let stats = self.query_stats.read().await;
+        // work with snapshot without holding lock
+        info!("{}", snapshot.get_slow_query_report(10));
+        info!("{}", snapshot.get_summary_report());
 
-        // Print slow query analysis
-        let slow_report = stats.get_slow_query_report(100);
-        if slow_report.contains("No slow queries") {
-            info!("{}", slow_report);
-        } else {
-            warn!("{}", slow_report);
-        }
-
-        // Print summary
-        info!("{}", stats.get_summary_report());
-
-        drop(stats); // Release read lock before write operation
-
-        // Write to database
-        if let Err(e) = self.write_to_database().await {
-            error!("Failed to write metrics to database: {}", e);
-        } else {
-            info!("✓ Metrics written to database");
+        if let Err(e) = self.write_snapshot_to_database(snapshot).await {
+            error!("Failed to write metrics: {}", e);
         }
     }
 
-    async fn write_to_database(&self) -> anyhow::Result<()> {
+    async fn write_snapshot_to_database(&self, snapshot: QueryStatistics) -> anyhow::Result<()> {
         use crate::database::handler::PostgresHandler;
 
         let handler = PostgresHandler::new(&self.credentials.conn_str).await?;
-        handler.write_metrics(self.query_stats.clone()).await?;
-
-        // Clear stats after successful write
-        let mut stats = self.query_stats.write().await;
-        stats.clear();
+        handler.write_metrics(snapshot).await?;
 
         Ok(())
     }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 pub async fn forward_proxy(
     client_socket: TcpStream,
@@ -194,35 +194,72 @@ async fn parse_server_messages(
     tracker: &Arc<Mutex<QueryTracker>>,
     query_stats: &Stats,
 ) -> usize {
-    let mut i = 0;
+    let mut offset = 0;
 
-    while i + 5 <= buf.len() {
-        let msg_type = buf[i];
-        let msg_len = u32::from_be_bytes([buf[i + 1], buf[i + 2], buf[i + 3], buf[i + 4]]) as usize;
+    while offset + 5 <= buf.len() {
+        let msg_type = buf[offset];
 
+        // Message length is in bytes 1-4 (big-endian u32)
+        let msg_len = u32::from_be_bytes([
+            buf[offset + 1],
+            buf[offset + 2],
+            buf[offset + 3],
+            buf[offset + 4],
+        ]) as usize;
+
+        // Sanity check: length includes the 4-byte length field itself
         if !(4..=1_000_000).contains(&msg_len) {
-            i += 1;
+            warn!(msg_type = msg_type, msg_len, "invalid_message_length");
+            offset += 1;
             continue;
         }
 
-        let total = 1 + msg_len;
-        if i + total > buf.len() {
-            return i;
+        // Total message size: 1 byte type + msg_len (which includes its own 4 bytes)
+        let total_size = 1 + msg_len;
+
+        if offset + total_size > buf.len() {
+            // Incomplete message - stop parsing, wait for more data
+            return offset;
         }
 
-        if msg_type == b'Z' {
-            let mut tracker = tracker.lock().await;
-            if let Some((sql, duration)) = tracker.complete_query() {
-                let mut stats = query_stats.write().await;
-                stats.record_query(&sql, duration);
+        match msg_type {
+            b'C' => {
+                // CommandComplete - this is where queries actually finish
+                // Format: 'C' + len + command_tag (null-terminated string)
+                // Example: "SELECT 1\0"
+
+                let mut tracker = tracker.lock().await;
+                if let Some((sql, duration)) = tracker.complete_query() {
+                    let mut stats = query_stats.write().await;
+                    stats.record_query(&sql, duration);
+                }
+            }
+
+            b'E' => {
+                // ErrorResponse - query failed, clear tracking
+                let mut tracker = tracker.lock().await;
+                if tracker.current_query.take().is_some() {
+                    warn!("query_error");
+                }
+            }
+
+            b'Z' => {
+                // ReadyForQuery - transaction boundary, not query completion
+                // We might want to log this for debugging transaction states
+                trace!("ready_for_query");
+            }
+
+            _ => {
+                // Ignore other message types (RowDescription, DataRow, etc.)
             }
         }
 
-        i += total;
+        offset += total_size;
     }
 
-    i
+    offset
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,22 +270,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_server_message() {
-        let buf = [b'Z', 0, 0, 0, 5, b'I'];
+        let buf = [b'C', 0, 0, 0, 5, b'I'];
         let tracker = Arc::new(Mutex::new(QueryTracker::new()));
         let query_stats = Arc::new(RwLock::new(QueryStatistics::new()));
 
         // Add a pending query
-        tracker
-            .lock()
-            .await
-            .pending_queries
-            .push_back(("SELECT 1".to_string(), Instant::now()));
+        tracker.lock().await.current_query = Some(("SELECT 1".to_string(), Instant::now()));
 
         parse_server_messages(&buf, &tracker, &query_stats).await;
 
-        assert_eq!(
-            tracker.lock().await.pending_queries.len(),
-            0,
+        assert!(
+            tracker.lock().await.current_query.is_none(),
             "Query should be completed after ReadyForQuery"
         );
     }
@@ -271,5 +303,53 @@ mod tests {
         assert!(fingerprint.contains("SELECT"));
         assert!(duration > Duration::from_millis(20));
         assert!(duration < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_query_lifecycle() {
+        let mut tracker = QueryTracker::new();
+
+        // Start a query
+        tracker.start_query("SELECT 1".to_string());
+        assert!(tracker.current_query.is_some());
+
+        // Complete it
+        let result = tracker.complete_query();
+        assert!(result.is_some());
+
+        let (sql, _duration) = result.unwrap();
+        assert_eq!(sql, "SELECT 1");
+        assert!(tracker.current_query.is_none());
+    }
+
+    #[test]
+    fn test_execute_without_parse() {
+        let mut tracker = QueryTracker::new();
+
+        // Execute without Parse should warn but not crash
+        tracker.start_execute();
+
+        // Should have nothing to complete
+        assert!(tracker.complete_query().is_none());
+    }
+
+    #[test]
+    fn test_parse_then_execute() {
+        let mut tracker = QueryTracker::new();
+
+        // Parse a statement
+        tracker.start_query("SELECT $1".to_string());
+
+        // Clear it (simulating CommandComplete after Parse)
+        tracker.complete_query();
+
+        // Execute reuses the prepared statement
+        tracker.start_execute();
+
+        let result = tracker.complete_query();
+        assert!(result.is_some());
+
+        let (sql, _) = result.unwrap();
+        assert_eq!(sql, "SELECT $1");
     }
 }

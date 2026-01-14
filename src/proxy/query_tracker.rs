@@ -1,11 +1,12 @@
-use std::collections::VecDeque;
 use std::time::Instant;
-use tracing::{debug, info};
+use tracing::{debug, trace, warn};
 
-/// Tracks in-flight queries in the PostgreSQL protocol
 #[derive(Debug, Default)]
 pub struct QueryTracker {
-    pub pending_queries: VecDeque<(String, Instant)>,
+    // For simple query protocol: one query active at a time
+    pub current_query: Option<(String, Instant)>,
+
+    // For extended query protocol: track prepared statements
     last_prepared: Option<String>,
 }
 
@@ -14,33 +15,37 @@ impl QueryTracker {
         Self::default()
     }
 
-    /// Start tracking a new query (from Parse or Query message)
+    /// Called when we see Parse (P) or Query (Q) messages
     pub fn start_query(&mut self, sql: String) {
-        debug!(%sql, "starting");
+        trace!(sql = %sql, "query_start");
+
+        // Store for later Execute
         self.last_prepared = Some(sql.clone());
-        self.pending_queries.push_back((sql, Instant::now()));
+
+        // Track as current query
+        self.current_query = Some((sql, Instant::now()));
     }
 
-    /// Start tracking an Execute (reuses last prepared statement)
+    /// Called when we see Execute (E) message
     pub fn start_execute(&mut self) {
         if let Some(ref sql) = self.last_prepared {
-            debug!(%sql, "starting");
-            self.pending_queries
-                .push_back((sql.clone(), Instant::now()));
+            trace!(sql = %sql, "execute_start");
+            self.current_query = Some((sql.clone(), Instant::now()));
+        } else {
+            warn!("Execute without prior Parse");
         }
     }
 
-    /// Complete the oldest in-flight query, returning (sql, duration)
+    /// Called when we see CommandComplete (C) OR ReadyForQuery (Z)
     pub fn complete_query(&mut self) -> Option<(String, std::time::Duration)> {
-        let completed = self
-            .pending_queries
-            .pop_front()
-            .map(|(sql, start)| (sql, start.elapsed()));
-
-        if let Some((ref sql, elapsed)) = completed {
-            info!(?elapsed, %sql, "completed");
-        }
-
-        completed
+        self.current_query.take().map(|(sql, start)| {
+            let duration = start.elapsed();
+            debug!(
+                duration_ms = duration.as_millis(),
+                sql = %sql,
+                "query_complete"
+            );
+            (sql, duration)
+        })
     }
 }
