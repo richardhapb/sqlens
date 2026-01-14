@@ -1,11 +1,14 @@
+#![allow(dead_code)]
+
 mod database;
 mod proxy;
 mod server;
 
-use crate::proxy::tcp::forward_proxy;
+use crate::database::handler::PostgresCredentials;
+use crate::proxy::tcp::handle_connection;
+use crate::server::metrics::QueryStatistics;
+use crate::server::reporter::MetricsReporter;
 use clap::Parser;
-use database::handler::PostgresCredentials;
-use server::metrics::QueryStatistics;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -16,25 +19,25 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Log, track, and store the data from the queries.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-struct Args {
+pub struct Args {
     /// Host of the Database engine (e.g. localhost or 127.0.0.1, default: localhost)
     #[arg(short('H'), long)]
     host: Option<String>,
 
     /// Port of the Database engine (e.g. 5432, default: 5432)
     #[arg(short, long)]
-    port: Option<String>,
+    port: Option<u16>,
 
-    /// Connection string of the Database engine (e.g. postgresql://myuser:mypass@localhost:5432/mydb)
+    /// Connection string where sqlens will store stats data (e.g. postgresql://myuser:mypass@localhost:5432/mydb)
     #[arg(short, long)]
     str: Option<String>,
 
     /// Port where sqlens will be listening
-    #[arg(short, long, default_value_t=5433.to_string())]
-    bind: String,
+    #[arg(short, long, default_value_t = 5433)]
+    bind: u16,
 
     /// Queries update interval (seconds) that is stored in database and logged (default: 300 = 5m)
-    #[arg(short, long, default_value_t = 5 * 60)]
+    #[arg(short, long, default_value_t = 300)]
     interval: u64,
 }
 
@@ -49,54 +52,65 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    // Shared metrics state
     let query_stats = Arc::new(RwLock::new(QueryStatistics::new()));
-    let credentials = PostgresCredentials::try_new(&args).ok_or_else(|| {
-        anyhow::anyhow!("Failed to create database credentials: missing configuration. Set the DATABASE_URL environment variable or pass the --str argument for the database to store the metrics data.")
-    })?;
 
-    let (host, port) = get_database_host(&args);
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", args.bind)).await?;
-    info!("sqlens proxy listening on 0.0.0.0:{}", args.bind);
+    // Database credentials for metrics storage
+    let credentials = PostgresCredentials::try_new(&args).ok_or_else(|| {
+        anyhow::anyhow!("Missing database configuration. Set DATABASE_URL or pass --str")
+    })?;
+    credentials.validate()?;
+
+    // Start metrics reporter (background task)
+    let reporter = MetricsReporter::new(
+        query_stats.clone(),
+        credentials.conn_str.clone(),
+        args.interval,
+    );
+    let _reporter_handle = reporter.start();
+    info!(interval_secs = args.interval, "metrics reporter started");
+
+    // Target database
+    let (target_host, target_port) = get_target_database(&args);
+    info!(host = %target_host, port = target_port, "proxying to database");
+
+    // Listen for connections
+    let listener = TcpListener::bind(("0.0.0.0", args.bind)).await?;
+    info!(port = args.bind, "sqlens proxy listening");
 
     loop {
-        let (client_socket, addr) = listener.accept().await?;
-        let query_stats_ref = query_stats.clone();
+        let (client_socket, client_addr) = listener.accept().await?;
 
-        let host = host.clone();
-        let port = port.clone();
-        let credentials = credentials.clone();
+        let stats = query_stats.clone();
+        let host = target_host.clone();
+
         tokio::spawn(async move {
-            if let Err(e) = forward_proxy(
-                client_socket,
-                addr,
-                query_stats_ref,
-                &host,
-                &port,
-                credentials,
-                args.interval,
-            )
-            .await
+            if let Err(e) =
+                handle_connection(client_socket, client_addr, stats, &host, target_port).await
             {
-                error!(%host, %port, "connection error: {e}");
+                error!(%client_addr, error = %e, "connection error");
             }
         });
     }
 }
 
-fn get_database_host(args: &Args) -> (Arc<String>, Arc<String>) {
-    let host = Arc::new(args.host.clone().unwrap_or_else(|| {
+fn get_target_database(args: &Args) -> (String, u16) {
+    let host = args.host.clone().unwrap_or_else(|| {
         std::env::var("SQLENS_DB_HOST").unwrap_or_else(|_| {
-            trace!("SQLENS_DB_HOST not set, using default");
+            trace!("SQLENS_DB_HOST not set, defaulting to localhost");
             "localhost".into()
         })
-    }));
+    });
 
-    let port = Arc::new(args.port.clone().unwrap_or_else(|| {
-        std::env::var("SQLENS_DB_PORT").unwrap_or_else(|_| {
-            trace!("SQLENS_DB_PORT not set, using default");
-            "5432".into()
-        })
-    }));
+    let port = args.port.unwrap_or_else(|| {
+        std::env::var("SQLENS_DB_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or_else(|| {
+                trace!("SQLENS_DB_PORT not set, defaulting to 5432");
+                5432
+            })
+    });
 
     (host, port)
 }

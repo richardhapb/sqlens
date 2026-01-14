@@ -1,57 +1,128 @@
-use super::metrics::Stats;
-use crate::{database::handler::PostgresCredentials, server::metrics::QueryStatistics};
+use crate::database::handler::PostgresHandler;
+use crate::server::metrics::Stats;
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
+/// Background reporter that periodically persists metrics to database
 pub struct MetricsReporter {
-    query_stats: Stats,
-    credentials: PostgresCredentials,
+    stats: Stats,
+    handler: Arc<Mutex<Option<PostgresHandler>>>,
     interval: Duration,
+    connection_string: String,
 }
 
 impl MetricsReporter {
-    pub fn new(query_stats: Stats, credentials: PostgresCredentials, interval: u64) -> Self {
+    pub fn new(stats: Stats, connection_string: String, interval_secs: u64) -> Self {
         Self {
-            query_stats,
-            credentials,
-            interval: Duration::from_secs(interval),
+            stats,
+            handler: Arc::new(Mutex::new(None)),
+            interval: Duration::from_secs(interval_secs),
+            connection_string,
         }
     }
 
-    /// Start the periodic reporting loop
-    pub fn start(self) {
+    /// Start the background reporter
+    /// Returns a handle to the spawned task
+    pub fn start(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(self.interval).await;
-                self.report().await;
-            }
-        });
+            self.run().await;
+        })
     }
 
-    async fn report(&self) {
-        info!("=== Metrics Report ===");
-        // Atomically swap out current stats
+    async fn run(self) {
+        info!(interval_secs = self.interval.as_secs(), "reporter_started");
+
+        // Initial connection
+        if let Err(e) = self.ensure_connected().await {
+            error!(error = %e, "initial_connection_failed");
+        }
+
+        let mut interval = tokio::time::interval(self.interval);
+
+        loop {
+            interval.tick().await;
+
+            if let Err(e) = self.flush().await {
+                warn!(error = %e, "flush_failed");
+            }
+        }
+    }
+
+    async fn ensure_connected(&self) -> anyhow::Result<()> {
+        let mut guard = self.handler.lock().await;
+
+        if let Some(ref handler) = *guard {
+            // Check if connection is still alive
+            if handler.health_check().await.is_ok() {
+                return Ok(());
+            }
+            warn!("connection_lost_reconnecting");
+        }
+
+        // Connect/reconnect
+        let handler = PostgresHandler::new(&self.connection_string).await?;
+        *guard = Some(handler);
+        info!("database_connected");
+        Ok(())
+    }
+
+    async fn flush(&self) -> anyhow::Result<()> {
+        // Ensure connection
+        self.ensure_connected().await?;
+
+        // Take snapshot (non-destructive)
         let snapshot = {
-            let mut stats = self.query_stats.write().await;
-            let snapshot = std::mem::replace(&mut *stats, QueryStatistics::new());
-            snapshot
+            let stats = self.stats.read().await;
+            stats.snapshot()
         };
 
-        // work with snapshot without holding lock
-        info!("{}", snapshot.get_slow_query_report(10));
-        info!("{}", snapshot.get_summary_report());
-
-        if let Err(e) = self.write_snapshot_to_database(snapshot).await {
-            error!("Failed to write metrics: {}", e);
+        if snapshot.is_empty() {
+            debug!("no_metrics_to_flush");
+            return Ok(());
         }
-    }
 
-    async fn write_snapshot_to_database(&self, snapshot: QueryStatistics) -> anyhow::Result<()> {
-        use crate::database::handler::PostgresHandler;
+        debug!(count = snapshot.len(), "flushing_metrics");
 
-        let handler = PostgresHandler::new(&self.credentials.conn_str).await?;
-        handler.write_metrics(snapshot).await?;
+        // Convert to DB rows
+        let rows: Vec<_> = snapshot.iter().map(|s| s.to_db_row()).collect();
+
+        // Persist
+        let handler = self.handler.lock().await;
+        if let Some(ref h) = *handler {
+            let affected = h.upsert_metrics(rows).await?;
+            info!(affected, "metrics_flushed");
+        }
 
         Ok(())
+    }
+}
+
+/// Standalone function to flush stats immediately
+/// Useful for graceful shutdown
+pub async fn flush_now(stats: &Stats, handler: &PostgresHandler) -> anyhow::Result<usize> {
+    let snapshot = stats.read().await.snapshot();
+
+    if snapshot.is_empty() {
+        return Ok(0);
+    }
+
+    let rows: Vec<_> = snapshot.iter().map(|s| s.to_db_row()).collect();
+    handler.upsert_metrics(rows).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::metrics::QueryStatistics;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn test_reporter_creation() {
+        let stats = Arc::new(RwLock::new(QueryStatistics::new()));
+        let reporter = MetricsReporter::new(stats, "postgres://test".to_string(), 60);
+        assert_eq!(reporter.interval, Duration::from_secs(60));
     }
 }

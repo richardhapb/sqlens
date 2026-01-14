@@ -6,7 +6,7 @@ WORKDIR /app
 RUN cargo install sqlx-cli --no-default-features --features postgres
 
 RUN apt-get update
-RUN apt-get -y install pkg-config librust-openssl-sys-dev --no-install-recommends
+RUN apt-get -y install pkg-config librust-openssl-sys-dev libpg-query clang --no-install-recommends
 
 COPY . .
 
