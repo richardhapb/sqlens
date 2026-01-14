@@ -14,15 +14,15 @@ A high-performance PostgreSQL wire protocol proxy that captures query metrics wi
 SQLens intercepts PostgreSQL wire protocol traffic, extracts query patterns using fingerprinting, and aggregates performance metrics. Point your app at SQLens instead of Postgres — everything else stays the same.
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│   Your App  │─────▶│   SQLens    │─────▶│  PostgreSQL │
-│  port 5433  │      │   (proxy)   │      │  port 5432  │
+│   Your App  │─────▶│   SQLens    │─────▶│  PostgreSQL │  <-- proxied database
+│             │      │  port 5433  │      │  port 5432  │
 └─────────────┘      └──────┬──────┘      └─────────────┘
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │ Metrics DB  │
-                    │  (postgres) │
-                    └─────────────┘
+                            │
+                            ▼
+                      ┌─────────────┐
+                      │ Metrics DB  │
+                      │  (postgres) │  <-- Storage stats data
+                      └─────────────┘
 ```
 
 ## Features
@@ -36,6 +36,7 @@ SQLens intercepts PostgreSQL wire protocol traffic, extracts query patterns usin
   - First seen / last seen timestamps
 - **Automatic persistence** — Metrics stored in PostgreSQL on configurable interval
 - **Memory-bounded** — LRU-style eviction prevents unbounded growth
+- **Real-time logs** — Handle verbosity using the `RUST_LOG` environment variable (trace/debug/info/warning/error); info is the default.
 
 ## Quick Start
 ```bash
@@ -43,10 +44,10 @@ SQLens intercepts PostgreSQL wire protocol traffic, extracts query patterns usin
 createdb sqlens_metrics
 
 # 2. Run the proxy
-export DATABASE_URL="postgresql://localhost/sqlens_metrics"
+export DATABASE_URL="postgresql://myuser:mypass@localhost:5432/sqlens_metrics"
 sqlens --bind 5433
 
-# 3. Point your app to port 5433 instead of 5432
+# 3. Point your app to port 5433 instead of 5432, you can use any port that you need.
 # That's it.
 ```
 

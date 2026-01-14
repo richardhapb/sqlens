@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT \n                fingerprint,\n                example_sql,\n                execution_count,\n                total_duration_secs,\n                min_duration_secs,\n                max_duration_secs,\n                avg_duration_secs\n            FROM query_metrics\n            WHERE avg_duration_secs > $1\n            ORDER BY avg_duration_secs DESC\n            LIMIT $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "fingerprint",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "example_sql",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "execution_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_duration_secs",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "min_duration_secs",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_duration_secs",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 6,
+        "name": "avg_duration_secs",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5d1f60a303d60db0156ebb5a9f81eac42978e4f1b24b0cf4016170b67617e0de"
+}

@@ -21,9 +21,10 @@ impl PostgresHandler {
     }
 
     /// Create schema - fingerprint the primary key concept
-    /// Probably this never is executed, because  `sqlx` does the
-    /// validation at compile time, but probably we will change
-    /// to cached approach for improving CI UX.
+    /// This is used when, because  `sqlx` does the
+    /// the migration using Dockerfile in CI, but probably we exists
+    /// another use case where this is used. Anyway, this ensure that
+    /// always the database has the necessary table.
     async fn ensure_schema(&self) -> anyhow::Result<()> {
         // Main table: fingerprint as unique identifier
         sqlx::query(
